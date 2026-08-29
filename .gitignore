@@ -1,6 +1,12 @@
 # dependencies (bun install)
 node_modules
 
+# Nestjs specific
+/dist
+/node_modules
+/build
+/tmp
+
 # output
 out
 dist
@@ -10,7 +16,7 @@ dist
 coverage
 *.lcov
 
-# logs
+# Logs
 logs
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
