@@ -1,0 +1,29 @@
+{
+  "monorepo": true,
+  "root": "apps/read-bills",
+  "sourceRoot": "apps/read-bills/src",
+  "compilerOptions": {
+    "webpack": true,
+    "tsConfigPath": "apps/read-bills/tsconfig.app.json"
+  },
+  "projects": {
+    "gmail-listener": {
+      "type": "application",
+      "root": "apps/gmail-listener",
+      "entryFile": "main",
+      "sourceRoot": "apps/gmail-listener/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/gmail-listener/tsconfig.app.json"
+      }
+    },
+    "read-bills": {
+      "type": "application",
+      "root": "apps/read-bills",
+      "entryFile": "main",
+      "sourceRoot": "apps/read-bills/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/read-bills/tsconfig.app.json"
+      }
+    }
+  }
+}
