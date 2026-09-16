@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
-  "main": "app.ts",
+  "main": "apps/gmail-listener/src/main.ts",
   "scripts": {
-    "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts",
-    "build": "bun build src/index.ts --outdir dist --target bun --minify",
+    "dev": "bun --watch apps/gmail-listener/src/main.ts",
+    "start": "bun apps/gmail-listener/src/main.ts",
+    "build": "bun build apps/gmail-listener/src/main.ts --outdir dist --target bun --minify",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
