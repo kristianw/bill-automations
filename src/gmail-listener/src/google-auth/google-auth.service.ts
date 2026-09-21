@@ -1,10 +1,13 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { google, Auth } from 'googleapis';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { GoogleTokenResponse, StoredGoogleCredentials } from './google-auth.types.ts';
 
 const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
+const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
+const EXPIRY_BUFFER_MS = 60_000; // refresh if within 60s of expiry
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const TOKEN_PATH = path.join(DATA_DIR, 'token.json');
@@ -12,7 +15,6 @@ const TOKEN_PATH = path.join(DATA_DIR, 'token.json');
 @Injectable()
 export class GoogleAuthService implements OnModuleInit {
   private readonly logger = new Logger(GoogleAuthService.name);
-  private readonly oauth2Client: Auth.OAuth2Client;
   // Authorization codes are single-use. Browsers commonly fire a duplicate
   // request at a slow-to-respond URL (this callback has to wait on a real
   // round trip to Google's token endpoint), so the second request would
@@ -20,44 +22,45 @@ export class GoogleAuthService implements OnModuleInit {
   // though the first request already succeeded. Track in-flight/handled
   // codes so a duplicate is a no-op instead of an error.
   private readonly handledCodes = new Set<string>();
+  private credentials: StoredGoogleCredentials = {};
 
-  constructor(private readonly config: ConfigService) {
-    this.oauth2Client = new google.auth.OAuth2(
-        this.config.get<string>('GOOGLE_CLIENT_ID'),
-        this.config.get<string>('GOOGLE_CLIENT_SECRET'),
-        this.config.get<string>('GOOGLE_REDIRECT_URI'),
-    );
-
-    // Google only returns a refresh_token on the *first* consent, but it does
-    // send refreshed access tokens on every renewal - persist those too so a
-    // restart doesn't force a re-consent.
-    this.oauth2Client.on('tokens', (tokens) => this.persistTokens(tokens));
-  }
+  constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
     if (fs.existsSync(TOKEN_PATH)) {
-      const saved = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
-      this.oauth2Client.setCredentials(saved);
+      this.credentials = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
       this.logger.log('Loaded saved Google OAuth token from data/token.json');
     } else {
       this.logger.warn('No saved token found - visit /auth/google to authorize');
     }
   }
 
-  getClient(): Auth.OAuth2Client {
-    return this.oauth2Client;
-  }
-
   isAuthorized(): boolean {
-    return Boolean(this.oauth2Client.credentials.refresh_token);
+    return Boolean(this.credentials.refresh_token);
   }
 
   generateAuthUrl(): string {
-    return this.oauth2Client.generateAuthUrl({
+    const params = new URLSearchParams({
+      client_id: this.config.get<string>('GOOGLE_CLIENT_ID')!,
+      redirect_uri: this.config.get<string>('GOOGLE_REDIRECT_URI')!,
+      response_type: 'code',
       access_type: 'offline', // required to get a refresh_token
       prompt: 'consent', // force re-consent so a refresh_token is re-issued if missing
-      scope: SCOPES,
+      scope: SCOPES.join(' '),
     });
+    return `${AUTH_ENDPOINT}?${params.toString()}`;
+  }
+
+  /** Returns a valid access token, refreshing first if it's expired or about to expire. */
+  async getAccessToken(): Promise<string> {
+    if (!this.credentials.refresh_token) {
+      throw new Error('Not authorized with Google - visit /auth/google to authorize');
+    }
+    const expiry = this.credentials.expiry_date ?? 0;
+    if (!this.credentials.access_token || Date.now() >= expiry - EXPIRY_BUFFER_MS) {
+      await this.refreshAccessToken();
+    }
+    return this.credentials.access_token!;
   }
 
   async handleCallback(code: string): Promise<void> {
@@ -67,23 +70,75 @@ export class GoogleAuthService implements OnModuleInit {
     }
     this.handledCodes.add(code); // mark synchronously, before the await, to close the race
 
-    try {
-      const { tokens } = await this.oauth2Client.getToken(code);
-      this.oauth2Client.setCredentials(tokens);
-      this.persistTokens(tokens);
-    } catch (err: any) {
-      if (err?.response?.data?.error === 'invalid_grant' && this.isAuthorized()) {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      client_id: this.config.get<string>('GOOGLE_CLIENT_ID')!,
+      client_secret: this.config.get<string>('GOOGLE_CLIENT_SECRET')!,
+      redirect_uri: this.config.get<string>('GOOGLE_REDIRECT_URI')!,
+    });
+
+    const res = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (!res.ok) {
+      if (json['error'] === 'invalid_grant' && this.isAuthorized()) {
         // Lost the race against a duplicate request that already succeeded.
         this.logger.warn('invalid_grant on a duplicate callback, but we are already authorized - ignoring');
         return;
       }
-      throw err;
+      throw new Error(
+          `Google token exchange failed: ${res.status} ${json['error'] ?? ''} ${json['error_description'] ?? ''}`.trim(),
+      );
     }
+
+    this.applyTokenResponse(json as unknown as GoogleTokenResponse);
   }
 
-  private persistTokens(tokens: Partial<Auth.Credentials>): void {
+  private async refreshAccessToken(): Promise<void> {
+    const body = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: this.credentials.refresh_token!,
+      client_id: this.config.get<string>('GOOGLE_CLIENT_ID')!,
+      client_secret: this.config.get<string>('GOOGLE_CLIENT_SECRET')!,
+    });
+
+    const res = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (!res.ok) {
+      throw new Error(
+          `Failed to refresh Google access token: ${res.status} ${json['error'] ?? ''} ${json['error_description'] ?? ''}`.trim(),
+      );
+    }
+
+    this.applyTokenResponse(json as unknown as GoogleTokenResponse);
+  }
+
+  private applyTokenResponse(tokenResponse: GoogleTokenResponse): void {
+    this.credentials = {
+      ...this.credentials,
+      access_token: tokenResponse.access_token,
+      expiry_date: Date.now() + tokenResponse.expires_in * 1000,
+      scope: tokenResponse.scope ?? this.credentials.scope,
+      token_type: tokenResponse.token_type ?? this.credentials.token_type,
+      // Google only returns a refresh_token on first consent - keep the existing one otherwise.
+      refresh_token: tokenResponse.refresh_token ?? this.credentials.refresh_token,
+    };
+    this.persistTokens(this.credentials);
+  }
+
+  private persistTokens(tokens: StoredGoogleCredentials): void {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    const existing = fs.existsSync(TOKEN_PATH)
+    const existing: StoredGoogleCredentials = fs.existsSync(TOKEN_PATH)
         ? JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'))
         : {};
     const merged = { ...existing, ...tokens };

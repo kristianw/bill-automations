@@ -1,7 +1,19 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { google, gmail_v1 } from 'googleapis';
-import { GoogleAuthService } from '../google-auth/google-auth.service';
-import { type GmailMessage, GmailHistoryOldError } from './gmail.types.ts';
+import { GoogleAuthService } from '../google-auth/google-auth.service.ts';
+import {
+  type GmailHistoryListResponse,
+  type GmailMessage,
+  GmailHistoryOldError,
+} from './gmail.types.ts';
+
+const BASE_URL = 'https://gmail.googleapis.com/gmail/v1/users/me';
+
+class GmailApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = 'GmailApiError';
+  }
+}
 
 @Injectable()
 export class GmailService {
@@ -9,13 +21,30 @@ export class GmailService {
 
   constructor(private readonly googleAuth: GoogleAuthService) {}
 
-  private get client(): gmail_v1.Gmail {
-    return google.gmail({ version: 'v1', auth: this.googleAuth.getClient() });
+  private async gmailFetchJson<T>(
+      path: string,
+      params?: Record<string, string | undefined>,
+  ): Promise<T> {
+    const accessToken = await this.googleAuth.getAccessToken();
+    const url = new URL(`${BASE_URL}${path}`);
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value !== undefined) url.searchParams.set(key, value);
+    }
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new GmailApiError(res.status, `Gmail API request failed: ${res.status} ${path} ${body}`);
+    }
+    return res.json() as Promise<T>;
   }
 
   /** Current historyId for the mailbox - used as the starting point for incremental sync. */
   async getCurrentHistoryId(): Promise<string> {
-    const { data } = await this.client.users.getProfile({ userId: 'me' });
+    const data = await this.gmailFetchJson<{ historyId?: string }>('/profile');
     if (!data.historyId) {
       throw new Error('Gmail did not return a historyId for this account');
     }
@@ -38,10 +67,9 @@ export class GmailService {
 
     try {
       do {
-        const { data } = await this.client.users.history.list({
-          userId: 'me',
+        const data = await this.gmailFetchJson<GmailHistoryListResponse>('/history', {
           startHistoryId,
-          historyTypes: ['messageAdded'],
+          historyTypes: 'messageAdded',
           pageToken,
         });
 
@@ -53,9 +81,9 @@ export class GmailService {
         if (data.historyId) latestHistoryId = data.historyId;
         pageToken = data.nextPageToken ?? undefined;
       } while (pageToken);
-    } catch (err: any) {
-      if (err?.code === 404 || err?.response?.status === 404) {
-        throw new HistoryTooOldError();
+    } catch (err) {
+      if (err instanceof GmailApiError && err.status === 404) {
+        throw new GmailHistoryOldError();
       }
       throw err;
     }
@@ -64,20 +92,15 @@ export class GmailService {
   }
 
   async getMessage(messageId: string): Promise<GmailMessage> {
-    const { data } = await this.client.users.messages.get({
-      userId: 'me',
-      id: messageId,
+    return this.gmailFetchJson<GmailMessage>(`/messages/${encodeURIComponent(messageId)}`, {
       format: 'full',
     });
-    return data;
   }
 
   async getAttachmentData(messageId: string, attachmentId: string): Promise<Buffer> {
-    const { data } = await this.client.users.messages.attachments.get({
-      userId: 'me',
-      messageId,
-      id: attachmentId,
-    });
+    const data = await this.gmailFetchJson<{ size?: number; data?: string }>(
+        `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    );
     if (!data.data) {
       throw new Error(`Attachment ${attachmentId} on message ${messageId} had no data`);
     }

@@ -1,7 +1,38 @@
-import type { gmail_v1 } from 'googleapis';
+export interface GmailHeader {
+  name: string;
+  value: string;
+}
 
-export type GmailMessagePart = gmail_v1.Schema$MessagePart;
-export type GmailMessage = gmail_v1.Schema$Message;
+export interface GmailMessagePart {
+  mimeType?: string;
+  filename?: string;
+  headers?: GmailHeader[];
+  body?: { attachmentId?: string; size?: number; data?: string };
+  parts?: GmailMessagePart[];
+}
+
+export interface GmailMessage {
+  id?: string;
+  threadId?: string;
+  historyId?: string;
+  internalDate?: string;
+  snippet?: string;
+  payload?: GmailMessagePart;
+}
+
+export interface GmailHistoryMessageAdded {
+  message?: { id?: string };
+}
+
+export interface GmailHistoryRecord {
+  messagesAdded?: GmailHistoryMessageAdded[];
+}
+
+export interface GmailHistoryListResponse {
+  history?: GmailHistoryRecord[];
+  historyId?: string;
+  nextPageToken?: string;
+}
 
 export class GmailHistoryOldError extends Error {
   constructor() {
