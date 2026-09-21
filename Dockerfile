@@ -13,7 +13,7 @@ RUN bun install
 FROM install AS dev
 COPY . .
 EXPOSE 3000
-CMD ["bun", "--watch", "apps/gmail-listener/src/main.ts"]
+CMD ["bun", "--watch", "apps/gmail-listener/src/app.ts"]
   
   # ---- build: bundles to a single production JS file ----
 FROM install AS build
