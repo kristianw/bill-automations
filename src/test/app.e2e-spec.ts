@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
-import { EmailPollerModule } from '../src/email-poller/email-poller-module.ts';
+import { EmailPollerModule } from '../email-poller/email-poller-module.ts';
 
 describe('GmailListenerController (e2e)', () => {
   let app: INestApplication;
