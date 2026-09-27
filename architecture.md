@@ -29,6 +29,8 @@
 
 ### Execute Actions
 
+Implemented as a handler registry (`src/actions/`): actions are enabled and configured in `data/actions.json`, run sequentially per bill, and per-action results are persisted so a failed email can be flagged and reprocessed without repeating actions that already succeeded. See CLAUDE.md for details.
+
 #### Actions 1 - Add to Calendar
 
 1. Which calendar type is easiest to add to?
