@@ -70,6 +70,7 @@ export class GmailService {
         const data = await this.gmailFetchJson<GmailHistoryListResponse>('/history', {
           startHistoryId,
           historyTypes: 'messageAdded',
+          labelId: 'INBOX', // skip sent mail and drafts - bills arrive in the inbox
           pageToken,
         });
 
