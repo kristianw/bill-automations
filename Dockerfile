@@ -13,12 +13,12 @@ RUN bun install
 FROM install AS dev
 COPY . .
 EXPOSE 3000
-CMD ["bun", "--watch", "apps/gmail-listener/src/app.ts"]
+CMD ["bun", "--watch", "src/app.ts"]
   
   # ---- build: bundles to a single production JS file ----
 FROM install AS build
 COPY . .
-RUN bun build src/index.ts --outdir dist --target bun --minify
+RUN bun build src/app.ts --outdir dist --target bun --minify
   
   # ---- production: minimal runtime image for deployment ----
 FROM base AS production
@@ -29,4 +29,4 @@ USER app
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 CMD bun -e "fetch('http://localhost:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["bun", "run", "dist/index.js"]
+CMD ["bun", "run", "dist/app.js"]
