@@ -12,6 +12,14 @@ const EXPIRY_BUFFER_MS = 60_000; // refresh if within 60s of expiry
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const TOKEN_PATH = path.join(DATA_DIR, 'token.json');
 
+/** Thrown when the stored refresh token was rejected and the user must re-consent at /auth/google. */
+export class GoogleReauthRequiredError extends Error {
+  constructor() {
+    super('Google authorization expired or was revoked - visit /auth/google to re-authorize');
+    this.name = 'GoogleReauthRequiredError';
+  }
+}
+
 @Injectable()
 export class GoogleAuthService implements OnModuleInit {
   private readonly logger = new Logger(GoogleAuthService.name);
@@ -115,12 +123,26 @@ export class GoogleAuthService implements OnModuleInit {
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
 
     if (!res.ok) {
+      if (json['error'] === 'invalid_grant') {
+        // Refresh token is dead (revoked, password changed, 7-day "Testing" expiry, unused 6+ months).
+        // Retrying will never work, so drop it and require a fresh consent.
+        this.clearRefreshToken();
+        this.logger.error(
+            'Google refresh token is no longer valid (invalid_grant) - re-authorize by visiting /auth/google',
+        );
+        throw new GoogleReauthRequiredError();
+      }
       throw new Error(
           `Failed to refresh Google access token: ${res.status} ${json['error'] ?? ''} ${json['error_description'] ?? ''}`.trim(),
       );
     }
 
     this.applyTokenResponse(json as unknown as GoogleTokenResponse);
+  }
+
+  private clearRefreshToken(): void {
+    this.credentials = {};
+    fs.rmSync(TOKEN_PATH, { force: true });
   }
 
   private applyTokenResponse(tokenResponse: GoogleTokenResponse): void {

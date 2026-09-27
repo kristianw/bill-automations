@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
-import { Response } from 'express';
-import { GoogleAuthService } from './google-auth.service';
+import type { Response } from 'express';
+import { GoogleAuthService } from './google-auth.service.ts';
 
 @Controller('auth/google')
 export class GoogleAuthController {
@@ -18,7 +18,8 @@ export class GoogleAuthController {
       return;
     }
     if (!code) {
-      res.status(400).send('Missing ?code from Google callback');
+      // Callback opened directly (bookmark, autocomplete) rather than via Google - restart the flow.
+      res.redirect(this.googleAuth.generateAuthUrl());
       return;
     }
 
